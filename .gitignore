@@ -1,0 +1,10 @@
+/venv
+/env
+/.idea
+.env
+__pycache__/
+*.pyc
+etl/data
+decisions.txt
+/data
+etl/states
