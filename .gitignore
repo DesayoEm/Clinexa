@@ -4,7 +4,9 @@
 .env
 __pycache__/
 *.pyc
-etl/data
+dags/include/etl/data
 decisions.txt
 /data
-etl/states
+dags/include/etl/states
+/logs
+/config
