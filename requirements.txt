@@ -1,11 +1,12 @@
 apache-airflow==3.1.0
-dbt-core==1.10.13
-dbt-postgres==1.9.1
+apache-airflow-providers-slack==9.3.0
 pandas==2.3.3
-psycopg2-binary==2.9.10
 requests==2.32.5
-SQLAlchemy==2.0.43
 pyarrow==21.0.0
 pydantic-settings==2.11.0
+awscli==1.42.59
+boto3==1.40.59
+
+
 
 

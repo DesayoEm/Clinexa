@@ -4,9 +4,9 @@
 .env
 __pycache__/
 *.pyc
-dags/include/etl/data
+dags/ct_gov/include/etl/data
 decisions.txt
 /data
-dags/include/etl/states
+dags/ct_gov/include/etl/states
 /logs
 /config
