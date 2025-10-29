@@ -8,92 +8,142 @@ import pyarrow.parquet as pq
 from typing import Dict
 
 from ct_gov.include.config import config
-from ct_gov.include.services.middleware import persist_state_before_failure
+from ct_gov.include.services.middleware import persist_state_before_failure, persist_state_before_exit
 from ct_gov.include.services.rate_limit_handler import RateLimiterHandler
+from ct_gov.include.tests import FailureGenerator
 from ct_gov.include.utilities.exceptions import RequestTimeoutError
 
 log = LoggingMixin().log
 
 
 class Extractor:
-    def __init__(self, context: Dict, pages_to_load = 3,  timeout: int = 30, max_retries: int = 3):
+    def __init__(self, context: Dict, timeout: int = 30, max_retries: int = 3):
 
         self.rate_limit_handler = RateLimiterHandler()
         self.context = context
         self.last_saved_page = self.determine_starting_point(context)['last_saved_page']
-        self.current_page = self.last_saved_page + 1
+        self.current_page = self.last_saved_page if self.last_saved_page else 0
         # technically current page should be  last saved + 1 but the val is incremented
         # by one in the make_requests func so no need to do it here
 
-        self.token = self.determine_starting_point(context)['last_token']
+        self.last_saved_token = self.determine_starting_point(context)['last_saved_token']
         self.next_page_url = self.determine_starting_point(context)['next_page_url']
 
         self.timeout = timeout
         self.max_retries = max_retries
-        self.pages_to_load = pages_to_load
+        self.failure_generator = FailureGenerator(True, 0.5)
 
 
         log.info(
             f"Initializing Extractor... \n"
-            f"\n Last saved extracted is page {self.last_saved_page}"
+            f"\n Last saved is page {self.last_saved_page}"
             f"\n URL to extract is {self.next_page_url}"
 
             )
 
 
+
     @staticmethod
     def determine_starting_point(context: Dict):
+        log.info(f"Determining starting point for extractor...")
+
         ti = context['task_instance']
+        if not ti:
+            log.warning("No task instance found in context, starting fresh")
+            return {
+                'last_saved_page': 0,
+                'last_saved_token': None,
+                'next_page_url': config.FIRST_PAGE_URL
+            }
 
-        if ti and ti.xcom_pull(key="state_before_failure"):
-            state = ti.xcom_pull(
-                key="state_before_failure",
-            )
+        states = ti.xcom_pull(
+            task_ids=ti.task_id,
+            key="previous_states",
+            include_prior_dates=True,
 
-            return{
-                'last_saved_page':state['last_saved_page'],
-                'last_page_token': state['last_saved_token'],
+        )
+
+        if states and isinstance(states, list):
+            state = states[0]
+            log.info(f"Existing context found from last run: {state} \n \n")
+
+            return {
+                'last_saved_page': state['pages_loaded'],
+                'last_saved_token': state['last_saved_token'],
                 'next_page_url': f"{config.BASE_URL}{state['last_saved_token']}"
             }
+
         else:
-            return{
+            log.info(f"No existing context found from previous run... \n \n")
+            return {
                 'last_saved_page': 0,
-                'last_page_token': None,
-                'next_page_url': f"{config.FIRST_PAGE_URL}"
+                'last_saved_token': None,
+                'next_page_url': config.FIRST_PAGE_URL
             }
 
-    def make_request(self):
-        url = self.next_page_url
 
-        self.current_page += 1
-        log.info(f"Starting from page {self.current_page}")
 
-        self.rate_limit_handler.wait_if_needed()
 
-        for attempt in range(self.max_retries):
+    def make_requests(self):
+        while self.current_page < 20:
             try:
-                response = requests.get(url, timeout=self.timeout)
-                if response.status_code == 200:
-                    data = response.json()
-                    next_page_token = data.get("nextPageToken")
+                url = self.next_page_url
 
-                    if not next_page_token:
-                        log.info(
-                            f"Next page not found on page {self.current_page}"
-                            f"Check metadata for the token for this page")
-                        return "Good to go"
+                self.current_page += 1
+                log.info(f"Starting from page {self.current_page}")
 
-                        # return self.save_response(data)
+                self.rate_limit_handler.wait_if_needed()
 
-                    self.next_page_url = f"{config.BASE_URL}{next_page_token}"
+                for attempt in range(self.max_retries):
+                    response = requests.get(url, timeout=self.timeout)
+                    attempt += 1
+                    if response.status_code == 200:
+                        data = response.json()
+                        next_page_token = data.get("nextPageToken")
+                        break
+                    elif attempt >= self.max_retries and response.status_code != 200:
+                        log.error(
+                            f"Request exception FAILED AFTER 3 attempts on page {self.current_page}"
+                        )
 
+                        persist_state_before_failure(
+                            error=RequestTimeoutError,
+                            context=self.context,
+                            metadata={
+                                'pages_loaded': self.last_saved_page,
+                                'last_saved_token': self.last_saved_token,
+                                'next_page_url': self.next_page_url,
+                            }
+
+                        )
+
+                if not next_page_token:
                     log.info(
-                        f'Successfully made request to {url} \n Last loaded page is page {self.current_page}'
-                        f'\n Next page is {self.next_page_url}'
-                    )
-                    return "Good to go"
+                    f"Next page not found on page {self.current_page}"
+                    f"Check metadata for the token for this page")
 
-                    # return self.save_response(data)
+                    metadata = {
+                        'pages_loaded': self.last_saved_page,
+                        'last_saved_token': self.last_saved_token,
+                        'next_page_url': self.next_page_url,
+                    }
+                    persist_state_before_exit(self.context, metadata)
+
+
+                if self.current_page == 10:
+                    self.failure_generator.maybe_fail_extraction(self.current_page)
+
+
+                self.last_saved_token = next_page_token
+                self.next_page_url = f"{config.BASE_URL}{next_page_token}"
+                self.last_saved_page += 1
+
+                log.info(
+                    f'Successfully made request to {self.next_page_url} \n Last loaded page is page {self.current_page}'
+                     f'\n Next page is {self.next_page_url}'
+                    )
+
+                # self.save_response(data)
 
             except Exception as e:
                 persist_state_before_failure(
@@ -101,26 +151,17 @@ class Extractor:
                     context=self.context,
                     metadata={
                         'last_saved_page': self.last_saved_page,
-                        'last_page_token': self.token,
+                        'last_saved_token': self.last_saved_token,
                         'next_page_url': self.next_page_url,
-                    },
+                        },
+                    )
+        metadata = {
+            'pages_loaded': self.last_saved_page,
+            'last_saved_token': self.last_saved_token,
+            'next_page_url': self.next_page_url,
+        }
+        persist_state_before_exit(self.context, metadata)
 
-                )
-
-        log.error(
-                f"Request exception FAILED AFTER 3 attempts on page {self.current_page}"
-            )
-
-        persist_state_before_failure(
-            error=RequestTimeoutError,
-            context=self.context,
-            metadata={
-                'last_saved_page': self.last_saved_page,
-                'last_page_token': self.token,
-                'next_page_url': self.next_page_url,
-            }
-
-        )
 
 
     def save_response(self, data: Dict):

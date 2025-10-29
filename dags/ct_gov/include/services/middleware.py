@@ -8,29 +8,68 @@ def persist_state_before_failure(error: Exception, context:Dict, metadata:Dict) 
     Exception is the original exc that was raised during extraction.
     """
     state = {
-        "last_saved_page": metadata.get("last_saved_page"),
-        "last_page_token": metadata.get("last_page_token"),
+        "run_state": "FAILED",
+        "pages_loaded": metadata.get("pages_loaded"),
+        "last_saved_token": metadata.get("last_saved_token"),
         "next_page_url": metadata.get("next_page_url"),
     }
 
     ti = context['task_instance']
     ti.xcom_push(
-        key="state_before_failure",
+        key="previous_states",
         value=state
     )
 
     details = (
-        "Extraction FAILED\n"
-        f"Last saved page: {state['last_saved_page']}\n"
-        f"Last saved token: {state['last_page_token']}\n"
+        f"CT gov extraction for {""} FAILED\n"
+        f"pages loaded: {state['pages_loaded']}\n"
+        f"Last saved token: {state['last_saved_token']}\n"
         f"ERROR: {error}"
     )
 
-    notifier = SlackNotifier(
-        slack_conn_id='slack',
-        text=details,
-        channel='ct-gov'
-    )
-    notifier.notify(context)
+    # notifier = SlackNotifier(
+    #     slack_conn_id='slack',
+    #     text=details,
+    #     channel='ct-gov'
+    # )
+    # notifier.notify(context)
     raise error
+
+
+def persist_state_before_exit(context:Dict, metadata:Dict) -> None:
+    """
+    Persists metadata as Xcom In case of a success or early exit or success
+    Metadata is provided by the Extractor class attributes
+    """
+    # tasks are considered successful if extractor loop runs till the end or a page does not have a token to the next one.
+    # to be sure the volume 'seems right', metadata will provide no of pages loaded
+
+    #Would I re-run a successful task? If it's idempotent and shit, what's the harm?
+    state = {
+        "run_state": "SUCCESS",
+        "pages_loaded": metadata.get("pages_loaded"),
+        "last_saved_token": metadata.get("last_saved_token"),
+        "next_page_url": metadata.get("next_page_url"),
+    }
+
+    ti = context['task_instance']
+    ti.xcom_push(
+        key="previous_states",
+        value=state
+    )
+
+    details = (
+        f"CT gov extraction for {""} considered SUCCESSFUL\n"
+        f"Pages loaded: {state['pages_loaded']}\n"
+        f"Last saved token: {state['last_saved_token']}\n"
+    )
+
+    # notifier = SlackNotifier(
+    #     slack_conn_id='slack',
+    #     text=details,
+    #     channel='ct-gov'
+    # )
+    # notifier.notify(context)
+
+
 

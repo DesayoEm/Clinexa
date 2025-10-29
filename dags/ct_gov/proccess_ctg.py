@@ -1,5 +1,6 @@
 from airflow.sdk import dag, task
 from pendulum import datetime,duration
+from airflow.sdk.definitions.context import get_current_context
 from ct_gov.include.etl.extract import Extractor
 
 
@@ -11,17 +12,16 @@ from ct_gov.include.etl.extract import Extractor
     tags=["ctgov"]
 )
 
-def process_ct_gov(**context):
+def process_ct_gov():
     @task
     def extract():
-        def dextract():
-            e=Extractor(context=context)
-            for i in range(e.pages_to_load):
-                e.make_request()
-        return dextract
+        context = get_current_context()
+
+        e = Extractor(context=context)
+        return e.make_requests()
 
 
-    extract = extract()
+    extract_task = extract()
 
 
 process_ct_gov()

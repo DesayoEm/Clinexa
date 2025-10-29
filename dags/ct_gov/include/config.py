@@ -16,8 +16,6 @@ class Settings(BaseSettings):
     AWS_REGION: str
     CLINEXA_BUCKET_NAME: str
 
-    DB_HOST: str
-    DB_PORT: int
     DB_NAME: str
     DB_USER: str
     DB_PASSWORD: str
